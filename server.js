@@ -1,7 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
-const { execFile } = require('child_process');
+const { execFile, exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -16,12 +16,12 @@ const upload = multer({
 
 app.get('/', (req, res) => res.json({ 
   status: 'Converter API Running', 
-  endpoints: ['/api/convert-cmyk', '/api/convert-eps', '/api/convert-svg', '/api/convert-ai'] 
+  endpoints: ['/api/convert-cmyk', '/api/convert-eps', '/api/convert-svg', '/api/convert-ai', '/api/pdf-to-word'] 
 }));
 
-// ========== Helper: Ghostscript রান + ডাউনলোড ==========
+// ===== Helper: Ghostscript চালাও =====
 const runGsAndDownload = (args, res, inputPath, outputDir, outPath, downloadName) => {
-  execFile('gs', args, { timeout: 180000, maxBuffer: 100 * 1024 * 1024 }, (err) => {
+  execFile('gs', args, { timeout: 180000 }, (err) => {
     if (err) {
       fs.rmSync(outputDir, { recursive: true, force: true });
       fs.unlink(inputPath, () => {});
@@ -34,7 +34,7 @@ const runGsAndDownload = (args, res, inputPath, outputDir, outPath, downloadName
   });
 };
 
-// ========== ১. RGB → CMYK ==========
+// ===== ১. RGB → CMYK =====
 app.post('/api/convert-cmyk', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
 
@@ -53,7 +53,7 @@ app.post('/api/convert-cmyk', upload.single('file'), (req, res) => {
   ], res, inputPath, outputDir, out, 'converted-cmyk.pdf');
 });
 
-// ========== ২. PDF → EPS ==========
+// ===== ২. PDF → EPS =====
 app.post('/api/convert-eps', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
 
@@ -69,7 +69,7 @@ app.post('/api/convert-eps', upload.single('file'), (req, res) => {
   ], res, inputPath, outputDir, out, 'converted-vector.eps');
 });
 
-// ========== ৩. PDF → SVG (Inkscape দিয়ে) ==========
+// ===== ৩. PDF → SVG (Inkscape) =====
 app.post('/api/convert-svg', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
 
@@ -90,7 +90,7 @@ app.post('/api/convert-svg', upload.single('file'), (req, res) => {
     });
 });
 
-// ========== ৪. PDF → AI (Adobe Illustrator Compatible) ==========
+// ===== ৪. PDF → AI =====
 app.post('/api/convert-ai', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
 
@@ -98,7 +98,6 @@ app.post('/api/convert-ai', upload.single('file'), (req, res) => {
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-'));
   const out = path.join(outputDir, 'output.ai');
 
-  // AI ফাইল আসলে PDF-compatible — Illustrator-এ খুলবে এবং editable থাকবে
   runGsAndDownload([
     '-dSAFER', '-dBATCH', '-dNOPAUSE',
     '-sDEVICE=pdfwrite',
@@ -111,6 +110,71 @@ app.post('/api/convert-ai', upload.single('file'), (req, res) => {
     `-sOutputFile=${out}`,
     inputPath
   ], res, inputPath, outputDir, out, 'converted-vector.ai');
+});
+
+// ===== ৫. PDF → Word (.docx) — বাংলা + ইংরেজি =====
+app.post('/api/pdf-to-word', upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file' });
+
+  const inputPath = req.file.path;
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'word-'));
+  const out = path.join(outputDir, 'output.docx');
+
+  // LibreOffice headless দিয়ে PDF → DOCX
+  execFile('libreoffice', [
+    '--headless', '--invisible', '--norestore',
+    '--convert-to', 'docx',
+    '--outdir', outputDir,
+    inputPath
+  ], { timeout: 180000 }, (err, stdout, stderr) => {
+    fs.unlink(inputPath, () => {});
+    if (err) {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+      return res.status(500).json({ error: 'Conversion failed', details: err.message });
+    }
+    // LibreOffice ইনপুট ফাইলের নামে আউটপুট বানায়, তাই নাম বদলাই
+    const convertedName = path.join(outputDir, path.parse(inputPath).name + '.docx');
+    const finalPath = fs.existsSync(convertedName) ? convertedName : out;
+    
+    if (!fs.existsSync(finalPath)) {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+      return res.status(500).json({ error: 'Output not found' });
+    }
+    res.download(finalPath, 'converted-document.docx', () => {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    });
+  });
+});
+
+// ===== ৬. Word (.docx) → PDF — বাংলা + ইংরেজি =====
+app.post('/api/word-to-pdf', upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file' });
+
+  const inputPath = req.file.path;
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpdf-'));
+
+  // LibreOffice দিয়ে DOCX → PDF
+  execFile('libreoffice', [
+    '--headless', '--invisible', '--norestore',
+    '--convert-to', 'pdf',
+    '--outdir', outputDir,
+    inputPath
+  ], { timeout: 180000 }, (err) => {
+    fs.unlink(inputPath, () => {});
+    if (err) {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+      return res.status(500).json({ error: 'Conversion failed', details: err.message });
+    }
+    const convertedName = path.join(outputDir, path.parse(inputPath).name + '.pdf');
+    
+    if (!fs.existsSync(convertedName)) {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+      return res.status(500).json({ error: 'Output not found' });
+    }
+    res.download(convertedName, 'converted-document.pdf', () => {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    });
+  });
 });
 
 const PORT = process.env.PORT || 3001;
