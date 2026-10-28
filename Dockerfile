@@ -4,6 +4,7 @@ RUN apt-get update && apt-get install -y \
     ghostscript \
     inkscape \
     libreoffice-writer \
+    libreoffice-draw \
     fonts-noto-core \
     fonts-beng \
     && rm -rf /var/lib/apt/lists/*
