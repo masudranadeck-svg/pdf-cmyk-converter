@@ -5,20 +5,16 @@ const { execFile, exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-
 const app = express();
 app.use(cors());
-
 const upload = multer({
   dest: '/tmp/uploads/',
   limits: { fileSize: 30 * 1024 * 1024 }
 });
-
-app.get('/', (req, res) => res.json({ 
-  status: 'Converter API Running', 
-  endpoints: ['/api/convert-cmyk', '/api/convert-eps', '/api/convert-svg', '/api/convert-ai', '/api/pdf-to-word', '/api/word-to-pdf'] 
+app.get('/', (req, res) => res.json({
+  status: 'Converter API Running',
+  endpoints: ['/api/convert-cmyk', '/api/convert-eps', '/api/convert-svg', '/api/convert-ai', '/api/pdf-to-word', '/api/word-to-pdf', '/api/compress-pdf']
 }));
-
 // ===== Helper: Ghostscript চালাও =====
 const runGsAndDownload = (args, res, inputPath, outputDir, outPath, downloadName) => {
   execFile('gs', args, { timeout: 180000 }, (err) => {
@@ -33,15 +29,12 @@ const runGsAndDownload = (args, res, inputPath, outputDir, outPath, downloadName
     });
   });
 };
-
 // ===== ১. RGB → CMYK =====
 app.post('/api/convert-cmyk', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
-
   const inputPath = req.file.path;
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cmyk-'));
   const out = path.join(outputDir, 'output.pdf');
-
   runGsAndDownload([
     '-dSAFER', '-dBATCH', '-dNOPAUSE',
     '-sDEVICE=pdfwrite',
@@ -52,15 +45,12 @@ app.post('/api/convert-cmyk', upload.single('file'), (req, res) => {
     inputPath
   ], res, inputPath, outputDir, out, 'converted-cmyk.pdf');
 });
-
 // ===== ২. PDF → EPS =====
 app.post('/api/convert-eps', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
-
   const inputPath = req.file.path;
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eps-'));
   const out = path.join(outputDir, 'output.eps');
-
   runGsAndDownload([
     '-dSAFER', '-dBATCH', '-dNOPAUSE',
     '-sDEVICE=eps2write',
@@ -68,36 +58,30 @@ app.post('/api/convert-eps', upload.single('file'), (req, res) => {
     inputPath
   ], res, inputPath, outputDir, out, 'converted-vector.eps');
 });
-
 // ===== ৩. PDF → SVG (Inkscape) =====
 app.post('/api/convert-svg', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
-
   const inputPath = req.file.path;
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'svg-'));
   const out = path.join(outputDir, 'output.svg');
-
   execFile('inkscape', [inputPath, '--export-type=svg', `--export-filename=${out}`],
     { timeout: 180000 }, (err) => {
-      fs.unlink(inputPath, () => {});
-      if (err) {
-        fs.rmSync(outputDir, { recursive: true, force: true });
-        return res.status(500).json({ error: 'SVG conversion failed', details: err.message });
-      }
-      res.download(out, 'converted-vector.svg', () => {
-        fs.rmSync(outputDir, { recursive: true, force: true });
-      });
+    fs.unlink(inputPath, () => {});
+    if (err) {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+      return res.status(500).json({ error: 'SVG conversion failed', details: err.message });
+    }
+    res.download(out, 'converted-vector.svg', () => {
+      fs.rmSync(outputDir, { recursive: true, force: true });
     });
+  });
 });
-
 // ===== ৪. PDF → AI =====
 app.post('/api/convert-ai', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
-
   const inputPath = req.file.path;
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-'));
   const out = path.join(outputDir, 'output.ai');
-
   runGsAndDownload([
     '-dSAFER', '-dBATCH', '-dNOPAUSE',
     '-sDEVICE=pdfwrite',
@@ -111,15 +95,12 @@ app.post('/api/convert-ai', upload.single('file'), (req, res) => {
     inputPath
   ], res, inputPath, outputDir, out, 'converted-vector.ai');
 });
-
 // ===== ৫. PDF → Word (.docx) — বাংলা + ইংরেজি =====
 app.post('/api/pdf-to-word', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
-
   const inputPath = req.file.path;
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'word-'));
   const out = path.join(outputDir, 'output.docx');
-
   // LibreOffice headless দিয়ে PDF → DOCX
   // ★★ FIX: --infilter=writer_pdf_import → PDF কে Writer এ খুলবে, নাহলে Draw এ খুলে DOCX বানাতে পারে না ★★
   execFile('libreoffice', [
@@ -137,7 +118,6 @@ app.post('/api/pdf-to-word', upload.single('file'), (req, res) => {
     // LibreOffice ইনপুট ফাইলের নামে আউটপুট বানায়, তাই নাম বদলাই
     const convertedName = path.join(outputDir, path.parse(inputPath).name + '.docx');
     const finalPath = fs.existsSync(convertedName) ? convertedName : out;
-    
     if (!fs.existsSync(finalPath)) {
       fs.rmSync(outputDir, { recursive: true, force: true });
       return res.status(500).json({ error: 'Output not found' });
@@ -147,14 +127,11 @@ app.post('/api/pdf-to-word', upload.single('file'), (req, res) => {
     });
   });
 });
-
 // ===== ৬. Word (.docx) → PDF — বাংলা + ইংরেজি =====
 app.post('/api/word-to-pdf', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
-
   const inputPath = req.file.path;
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpdf-'));
-
   // LibreOffice দিয়ে DOCX → PDF (এখানে infilter লাগবে না — DOCX natively খোলে)
   execFile('libreoffice', [
     '--headless', '--invisible', '--norestore',
@@ -168,7 +145,6 @@ app.post('/api/word-to-pdf', upload.single('file'), (req, res) => {
       return res.status(500).json({ error: 'Conversion failed', details: err.message });
     }
     const convertedName = path.join(outputDir, path.parse(inputPath).name + '.pdf');
-    
     if (!fs.existsSync(convertedName)) {
       fs.rmSync(outputDir, { recursive: true, force: true });
       return res.status(500).json({ error: 'Output not found' });
@@ -178,6 +154,24 @@ app.post('/api/word-to-pdf', upload.single('file'), (req, res) => {
     });
   });
 });
-
+// ===== ৭. PDF Size Reducer — ফাইল সাইজ কমানো (নতুন!) =====
+app.post('/api/compress-pdf', upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file' });
+  // level: screen = সবচেয়ে ছোট, ebook = মাঝারি, printer = উন্নত মান
+  const levels = ['screen', 'ebook', 'printer', 'prepress'];
+  const level = levels.includes(req.body.level) ? req.body.level : 'ebook';
+  const inputPath = req.file.path;
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'compress-'));
+  const out = path.join(outputDir, 'compressed.pdf');
+  runGsAndDownload([
+    '-dSAFER', '-dBATCH', '-dNOPAUSE',
+    '-sDEVICE=pdfwrite',
+    '-dCompatibilityLevel=1.5',
+    `-dPDFSETTINGS=/${level}`,
+    '-dDetectDuplicateImages=true',
+    `-sOutputFile=${out}`,
+    inputPath
+  ], res, inputPath, outputDir, out, 'compressed.pdf');
+});
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log(`Running on ${PORT}`));
