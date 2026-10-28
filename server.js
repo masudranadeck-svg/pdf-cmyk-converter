@@ -9,7 +9,7 @@ const app = express();
 app.use(cors());
 const upload = multer({
   dest: '/tmp/uploads/',
-  limits: { fileSize: 30 * 1024 * 1024 }
+  limits: { fileSize: 100 * 1024 * 1024 }
 });
 app.get('/', (req, res) => res.json({
   status: 'Converter API Running',
@@ -152,24 +152,99 @@ app.post('/api/word-to-pdf', upload.single('file'), (req, res) => {
     });
   });
 });
-// ===== ৭. PDF Size Reducer — ফাইল সাইজ কমানো (নতুন!) =====
-app.post('/api/compress-pdf', upload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file' });
-  // level: screen = সবচেয়ে ছোট, ebook = মাঝারি, printer = উন্নত মান
-  const levels = ['screen', 'ebook', 'printer', 'prepress'];
-  const level = levels.includes(req.body.level) ? req.body.level : 'ebook';
-  const inputPath = req.file.path;
-  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'compress-'));
-  const out = path.join(outputDir, 'compressed.pdf');
-  runGsAndDownload([
-    '-dSAFER', '-dBATCH', '-dNOPAUSE',
-    '-sDEVICE=pdfwrite',
-    '-dCompatibilityLevel=1.5',
-    `-dPDFSETTINGS=/${level}`,
-    '-dDetectDuplicateImages=true',
-    `-sOutputFile=${out}`,
-    inputPath
-  ], res, inputPath, outputDir, out, 'compressed.pdf');
+// ===== ৭. PDF Size Reducer — সাইজ কমানো (Preset + Custom Target Size) =====
+const compressUpload = upload.single('file');
+app.post('/api/compress-pdf', (req, res) => {
+  compressUpload(req, res, (err) => {
+    if (err) {
+      // ফাইল খুব বড় হলে সুন্দর এরর মেসেজ
+      const friendly = err.code === 'LIMIT_FILE_SIZE' ? 'File size 100 MB er kom hote hobe!' : (err.message || 'Upload failed');
+      return res.status(400).json({ error: 'Upload failed', details: friendly });
+    }
+    if (!req.file) return res.status(400).json({ error: 'No file' });
+    const inputPath = req.file.path;
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'compress-'));
+    const out = path.join(outputDir, 'compressed.pdf');
+    const best = path.join(outputDir, 'best.pdf');
+    const levels = ['screen', 'ebook', 'printer', 'prepress'];
+    const level = levels.includes(req.body.level) ? req.body.level : 'ebook';
+    // Custom target size (KB) — frontend theke targetKB ashle iterative komano hobe
+    const targetKB = parseInt(req.body.targetKB, 10);
+    const hasTarget = !isNaN(targetKB) && targetKB >= 5;
+
+    const runGs = (args) => new Promise((resolve) => {
+      execFile('gs', args, { timeout: 60000 }, (e) => resolve(!e));
+    });
+
+    (async () => {
+      try {
+        if (hasTarget) {
+          // ==== CUSTOM TARGET MODE: step by step quality kome target e namao ====
+          // ধাপ ১: আগে মাঝারি প্রিসেট দিয়ে দেখো
+          let ok = await runGs([
+            '-dSAFER', '-dBATCH', '-dNOPAUSE', '-dQUIET',
+            '-sDEVICE=pdfwrite', '-dCompatibilityLevel=1.5',
+            '-dPDFSETTINGS=/ebook', '-dDetectDuplicateImages=true',
+            `-sOutputFile=${out}`, inputPath
+          ]);
+          if (ok && fs.existsSync(out) && fs.statSync(out).size > 0) fs.copyFileSync(out, best);
+          // ধাপ ২: image resolution + JPEG quality ladder — target e na porjonto
+          const ladder = [
+            { dpi: 150, q: 0.5 }, { dpi: 120, q: 1.0 }, { dpi: 100, q: 1.5 },
+            { dpi: 80, q: 2.0 }, { dpi: 60, q: 3.0 }, { dpi: 45, q: 4.0 },
+            { dpi: 30, q: 5.0 }, { dpi: 20, q: 6.0 }
+          ];
+          for (const step of ladder) {
+            if (fs.existsSync(best) && fs.statSync(best).size <= targetKB * 1024) break;
+            ok = await runGs([
+              '-dSAFER', '-dBATCH', '-dNOPAUSE', '-dQUIET',
+              '-sDEVICE=pdfwrite', '-dCompatibilityLevel=1.5',
+              '-dDetectDuplicateImages=true',
+              '-dPassThroughJPEGImages=false', '-dPassThroughJPXImages=false',
+              '-dDownsampleColorImages=true', '-dDownsampleGrayImages=true',
+              '-dAutoFilterColorImages=false', '-dColorImageFilter=/DCTEncode',
+              '-dAutoFilterGrayImages=false', '-dGrayImageFilter=/DCTEncode',
+              '-dColorImageDownsampleType=/Average', '-dGrayImageDownsampleType=/Average',
+              '-dColorImageDownsampleThreshold=1.0', '-dGrayImageDownsampleThreshold=1.0',
+              `-dColorImageResolution=${step.dpi}`, `-dGrayImageResolution=${step.dpi}`,
+              `-dMonoImageResolution=${Math.max(150, step.dpi * 3)}`,
+              `-sOutputFile=${out}`,
+              '-c', `<< /ColorImageDict << /QFactor ${step.q} /HSamples [1 1 1 1] /VSamples [1 1 1 1] >> /GrayImageDict << /QFactor ${step.q} /HSamples [1 1 1 1] /VSamples [1 1 1 1] >> >> setdistillerparams`,
+              '-f', inputPath
+            ]);
+            // sobcheye choto file ta rekhe dao
+            if (ok && fs.existsSync(out) && fs.statSync(out).size > 0) {
+              if (!fs.existsSync(best) || fs.statSync(out).size < fs.statSync(best).size) {
+                fs.copyFileSync(out, best);
+              }
+            }
+          }
+          if (!fs.existsSync(best)) throw new Error('Compression failed');
+          res.download(best, 'compressed.pdf', () => {
+            fs.rmSync(outputDir, { recursive: true, force: true });
+            fs.unlink(inputPath, () => {});
+          });
+        } else {
+          // ==== PRESET MODE (screen/ebook/printer) — ager moto ====
+          const ok = await runGs([
+            '-dSAFER', '-dBATCH', '-dNOPAUSE', '-dQUIET',
+            '-sDEVICE=pdfwrite', '-dCompatibilityLevel=1.5',
+            `-dPDFSETTINGS=/${level}`, '-dDetectDuplicateImages=true',
+            `-sOutputFile=${out}`, inputPath
+          ]);
+          if (!ok || !fs.existsSync(out) || fs.statSync(out).size === 0) throw new Error('Compression failed');
+          res.download(out, 'compressed.pdf', () => {
+            fs.rmSync(outputDir, { recursive: true, force: true });
+            fs.unlink(inputPath, () => {});
+          });
+        }
+      } catch (e) {
+        fs.rmSync(outputDir, { recursive: true, force: true });
+        fs.unlink(inputPath, () => {});
+        return res.status(500).json({ error: 'Compression failed', details: e.message });
+      }
+    })();
+  });
 });
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => console.log(`Running on ${PORT}`));
