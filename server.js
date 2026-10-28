@@ -101,8 +101,7 @@ app.post('/api/pdf-to-word', upload.single('file'), (req, res) => {
   const inputPath = req.file.path;
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'word-'));
   const out = path.join(outputDir, 'output.docx');
-  // LibreOffice headless দিয়ে PDF → DOCX
-  // ★★ FIX: --infilter=writer_pdf_import → PDF কে Writer এ খুলবে, নাহলে Draw এ খুলে DOCX বানাতে পারে না ★★
+  // ★★ FIX: --infilter=writer_pdf_import → PDF কে Writer এ খুলবে ★★
   execFile('libreoffice', [
     '--headless', '--invisible', '--norestore',
     '--infilter=writer_pdf_import',
@@ -132,7 +131,6 @@ app.post('/api/word-to-pdf', upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file' });
   const inputPath = req.file.path;
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpdf-'));
-  // LibreOffice দিয়ে DOCX → PDF (এখানে infilter লাগবে না — DOCX natively খোলে)
   execFile('libreoffice', [
     '--headless', '--invisible', '--norestore',
     '--convert-to', 'pdf',
