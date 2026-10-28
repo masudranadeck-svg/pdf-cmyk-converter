@@ -16,7 +16,7 @@ const upload = multer({
 
 app.get('/', (req, res) => res.json({ 
   status: 'Converter API Running', 
-  endpoints: ['/api/convert-cmyk', '/api/convert-eps', '/api/convert-svg', '/api/convert-ai', '/api/pdf-to-word'] 
+  endpoints: ['/api/convert-cmyk', '/api/convert-eps', '/api/convert-svg', '/api/convert-ai', '/api/pdf-to-word', '/api/word-to-pdf'] 
 }));
 
 // ===== Helper: Ghostscript চালাও =====
@@ -121,8 +121,10 @@ app.post('/api/pdf-to-word', upload.single('file'), (req, res) => {
   const out = path.join(outputDir, 'output.docx');
 
   // LibreOffice headless দিয়ে PDF → DOCX
+  // ★★ FIX: --infilter=writer_pdf_import → PDF কে Writer এ খুলবে, নাহলে Draw এ খুলে DOCX বানাতে পারে না ★★
   execFile('libreoffice', [
     '--headless', '--invisible', '--norestore',
+    '--infilter=writer_pdf_import',
     '--convert-to', 'docx',
     '--outdir', outputDir,
     inputPath
@@ -153,7 +155,7 @@ app.post('/api/word-to-pdf', upload.single('file'), (req, res) => {
   const inputPath = req.file.path;
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpdf-'));
 
-  // LibreOffice দিয়ে DOCX → PDF
+  // LibreOffice দিয়ে DOCX → PDF (এখানে infilter লাগবে না — DOCX natively খোলে)
   execFile('libreoffice', [
     '--headless', '--invisible', '--norestore',
     '--convert-to', 'pdf',
